@@ -12,15 +12,15 @@ def is_Equilibrium(data: np.array,
                      min_data_points: int = 200) -> bool:
     
     
-    # 自相关分析
+    # auto-corr analysis
     def _auto_correlation(vec):
         nlags = int(len(vec) * 3/4)
         if nlags < 1:
-            return True, -1  # 数据太短直接返回
+            return True, -1
         
         try:
             acf = sm.tsa.acf(vec, nlags=nlags, fft=False)
-        except:  # 处理全相同数据的情况
+        except:  
             return True, -1
             
         acf_abs = np.abs(acf)
@@ -30,27 +30,26 @@ def is_Equilibrium(data: np.array,
             return False, -1  # 未找到合适滞后长度
         return False, lag_candidates[0]  # 返回第一个满足条件的滞后
     
-    # 执行自相关分析
     same, lag = _auto_correlation(data)
     if same or lag < 1:
         return False
     
-    # 根据滞后长度抽样
+    # slicing
     sampled_data = data[::lag]
     
-    # 确保有足够数据点进行KS检验
+    # Make sure there is enough sample
     if len(sampled_data) < 2:
         return False
     
-    # 分割数据集进行KS检验
+    # separate into two parts
     split_idx = len(sampled_data) // 2
     part1 = sampled_data[:split_idx]
     part2 = sampled_data[split_idx:]
     
-    # 执行KS检验
+    # KS sampling
     stat, p_value = ks_2samp(part1, part2)
     
-    # 综合判断条件
+    # returns bool
     return (
         (p_value >= p_threshold or stat <= stat_threshold) 
         and len(sampled_data) >= min_data_points
@@ -65,17 +64,18 @@ step = 0.02
 separation = int((T_final-T_initial)/step) +1
 temperature = np.linspace(T_initial,T_final,separation)
 separation = len(temperature)
-
 #defines an array, consists of temperature we want to calculate.
 
 a = 20 
-b = 20 # defines the size, size = (a,b)
+b = 20 # defines the size of spin field, size = (a,b)
 Nbin = 100
 Ntest = 10
 
 Nsweep = 10
 num = Nsweep*a*b
 spin = np.ones((a,b),dtype=int) #generates the spin field
+
+#couplings J1 is along x axis, J2 along y axis nn hopping and J3 is nnn hopping
 J_1 = 1
 J_2 = 1
 J_3 = -0.2
@@ -119,7 +119,7 @@ def sweep(t,spin,position_x,position_y,random_number):
                                     )
                                 ))
 
-    # Processing the recorded data
+    # Processing the recorded data 
     Magnetization = np.average(M)
     Susceptibility = (np.average(M**2) - np.average(M)**2)/t
     Energy = np.average(E)
@@ -130,9 +130,9 @@ def sweep(t,spin,position_x,position_y,random_number):
 def Ising(t,spin):
     Time = time.time()
     
-    Magnetization = []
-    Susceptibility = []
-    Energy=[]
+    Magnetization    = []
+    Susceptibility   = []
+    Energy           = []
     Heat_Capacitance = []
 
     while True:
@@ -151,7 +151,7 @@ def Ising(t,spin):
         Heat_Capacitance.append(Heat_Capacitance_val)
 
         if len(Magnetization)>100:
-            if is_Equilibrium(Magnetization) and is_Equilibrium(Susceptibility) and is_Equilibrium(Energy) and is_Equilibrium(Heat_Capacitance):
+            if is_Equilibrium(Magnetization) and is_Equilibrium(Susceptibility) and is_Equilibrium(Energy) and is_Equilibrium(Heat_Capacitance): #Do KS sampling
                 break
 
     Magnetization = np.array([np.average(Magnetization),Confidence_interval(Magnetization)])
