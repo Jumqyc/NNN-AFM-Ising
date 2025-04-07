@@ -2,28 +2,96 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time
 from numba import njit
+import statsmodels.api as sm
+from scipy.stats import ks_2samp
+
+def is_Equilibrium(data: np.array, 
+                     auto_corr_thresh: float = 1e-2,
+                     stat_threshold: float = 0.1,
+                     p_threshold: float = 0.01,
+                     min_data_points: int = 200) -> bool:
+    
+    
+    # 自相关分析
+    def _auto_correlation(vec):
+        nlags = int(len(vec) * 3/4)
+        if nlags < 1:
+            return True, -1  # 数据太短直接返回
+        
+        try:
+            acf = sm.tsa.acf(vec, nlags=nlags, fft=False)
+        except:  # 处理全相同数据的情况
+            return True, -1
+            
+        acf_abs = np.abs(acf)
+        lag_candidates = np.where(acf_abs <= auto_corr_thresh)[0]
+        
+        if len(lag_candidates) == 0:
+            return False, -1  # 未找到合适滞后长度
+        return False, lag_candidates[0]  # 返回第一个满足条件的滞后
+    
+    # 执行自相关分析
+    same, lag = _auto_correlation(data)
+    if same or lag < 1:
+        return False
+    
+    # 根据滞后长度抽样
+    sampled_data = data[::lag]
+    
+    # 确保有足够数据点进行KS检验
+    if len(sampled_data) < 2:
+        return False
+    
+    # 分割数据集进行KS检验
+    split_idx = len(sampled_data) // 2
+    part1 = sampled_data[:split_idx]
+    part2 = sampled_data[split_idx:]
+    
+    # 执行KS检验
+    stat, p_value = ks_2samp(part1, part2)
+    
+    # 综合判断条件
+    return (
+        (p_value >= p_threshold or stat <= stat_threshold) 
+        and len(sampled_data) >= min_data_points
+    )
+
+
 
 Time = time.time()
-T_initial = 1
-T_final   = 2
-step = 0.1
+T_initial = 1.5
+T_final   = 1.9
+step = 0.02
 separation = int((T_final-T_initial)/step) +1
 temperature = np.linspace(T_initial,T_final,separation)
+separation = len(temperature)
+
+#defines an array, consists of temperature we want to calculate.
 
 a = 20 
 b = 20 # defines the size, size = (a,b)
-Nbin = 5000
-Ntest = 100
+Nbin = 100
+Ntest = 10
 
-Nsweep = 15
+Nsweep = 10
 num = Nsweep*a*b
 spin = np.ones((a,b),dtype=int) #generates the spin field
 J_1 = 1
 J_2 = 1
 J_3 = -0.2
 
+def Confidence_interval(arr): #returns the confidence interval of given array. 
+    #Only used in the end
+    std = np.std(arr,ddof=1)
+    n = np.size(arr)
+    return std/np.sqrt(n)*1.96
+
+
 @njit
 def sweep(t,spin,position_x,position_y,random_number):
+    # the latter four variables are not important, only to speed up the program by generating the random numbers outside the loop. 
+    # t is the temperature.
+    # calculate Magnetization and Energy for Nbin = 100 configuration, then calculate the average Magnetization, Susceptibility, Energy and Heat capacitance
     M = np.zeros(Nbin)
     E = np.zeros(Nbin)
     for n in range(num*Nbin):
@@ -33,11 +101,13 @@ def sweep(t,spin,position_x,position_y,random_number):
             J_1*(spin[(x+1)%a,y]+spin[(x-1)%a,y])
             +J_2*(spin[x,(y+1)%b]+spin[x,(y-1)%b])
             +J_3*(spin[(x+1)%a,(y+1)%a]+spin[(x-1)%a,(y-1)%a]
-             +spin[(x+1)%a,(y+1)%a]+spin[(x-1)%a,(y-1)%a]))
+            +spin[(x+1)%a,(y+1)%a]+spin[(x-1)%a,(y-1)%a])
+            )
         #Calculate the energy
         if np.exp(-dE/t) > random_number[n]:
             spin[x,y] *=-1 #Reject or accept the flip with probability exp(-dE/t)
-        if n%num==0:
+        
+        if n%num==0: #record E and M after sweeping 
             rows = np.arange(a)
             cols = np.arange(b)
             M[n//num] = np.abs(np.average(spin))
@@ -48,38 +118,59 @@ def sweep(t,spin,position_x,position_y,random_number):
                                     row_shifted_spin[:,(cols+1)%b]+row_shifted_spin[:,(cols-1)%b]
                                     )
                                 ))
-    return spin, M , E
+
+    # Processing the recorded data
+    Magnetization = np.average(M)
+    Susceptibility = (np.average(M**2) - np.average(M)**2)/t
+    Energy = np.average(E)
+    Heat_Capacitance = (np.average(E**2) - np.average(E)**2)/ t**2
+
+    return spin, Magnetization, Susceptibility, Energy, Heat_Capacitance
 
 def Ising(t,spin):
     Time = time.time()
-    #generate the random number outside the loop
-    position_x = np.random.randint(a,size=num*Nbin)
-    position_y = np.random.randint(b,size=num*Nbin)
-    random_number = np.random.uniform(0,1,size=(num*Nbin))
-    ##sweeping
-    spin, M , E = sweep(t,spin,position_x,position_y,random_number)
-    #Finish sweeping    
     
+    Magnetization = []
+    Susceptibility = []
+    Energy=[]
+    Heat_Capacitance = []
 
-    M = np.reshape(M,(Ntest,Nbin//Ntest))
-    E = np.reshape(E,(Ntest,Nbin//Ntest))
+    while True:
+        #generate the random number outside the loop
+        position_x = np.random.randint(a,size=num*Nbin)
+        position_y = np.random.randint(b,size=num*Nbin)
+        random_number = np.random.uniform(0,1,size=(num*Nbin))
 
-    Magnetization = np.average(M,axis=1)
-    Susceptibility = (np.average(M**2,axis=1) - np.average(M,axis=1)**2)/t
-    Energy = np.average(E,axis=1)
-    Heat_Capacitance = (np.average(E**2,axis=1) - np.average(E,axis=1)**2)/ t**2
-    print('Time used for each tempreture is',time.time()-Time)
-    return Magnetization,Susceptibility , Energy,Heat_Capacitance #returns the M and E at given temperature
+    ##sweeping
+        spin, Magnetization_val ,Susceptibility_val,Energy_val,Heat_Capacitance_val = sweep(t,spin,position_x,position_y,random_number)
+    #Finish sweeping, returns updated spin and physics quantity.
+    
+        Magnetization.append(Magnetization_val)
+        Susceptibility.append(Susceptibility_val)
+        Energy.append(Energy_val)
+        Heat_Capacitance.append(Heat_Capacitance_val)
 
-def Confidence_interval(arr):
-    std = np.std(arr,ddof=1,axis= 1)
-    n = np.size(arr,axis = 1)
-    return std/np.sqrt(n)
+        if len(Magnetization)>100:
+            if is_Equilibrium(Magnetization) and is_Equilibrium(Susceptibility) and is_Equilibrium(Energy) and is_Equilibrium(Heat_Capacitance):
+                break
 
-Magnetization = np.zeros((separation,Ntest),dtype=float)
-Susceptibility =np.zeros((separation,Ntest),dtype=float)
-Energy = np.zeros((separation,Ntest),dtype=float)
-Heat_Capacitance = np.zeros((separation,Ntest),dtype=float)
+    Magnetization = np.array([np.average(Magnetization),Confidence_interval(Magnetization)])
+    Susceptibility = np.array([np.average(Susceptibility),Confidence_interval(Susceptibility)])
+    Energy = np.array([np.average(Energy),Confidence_interval(Energy)])
+    Heat_Capacitance = np.array([np.average(Heat_Capacitance),Confidence_interval(Heat_Capacitance)])
+
+    print('Time used for each temperature is',time.time()-Time)
+
+    return Magnetization ,Susceptibility , Energy,Heat_Capacitance #returns physical quantities and their errors
+
+
+
+
+Magnetization = np.zeros((separation,2),dtype=float) 
+# M[t,0] record the average value at temperature t, and M[t,1] record the error of this value
+Susceptibility =np.zeros((separation,2),dtype=float)
+Energy = np.zeros((separation,2),dtype=float)
+Heat_Capacitance = np.zeros((separation,2),dtype=float)
 
 
 for t_ind in range(separation):
@@ -90,25 +181,25 @@ fig, axs = plt.subplots(2,2)
 
 #####First plotting, avg(M)
 
-axs[0,0].errorbar(temperature,np.average(Magnetization,axis=1),yerr = Confidence_interval(Magnetization))
+axs[0,0].errorbar(temperature,Magnetization[:,0],yerr = Magnetization[:,1])
 axs[0,0].set_xlim(T_initial,T_final)
 axs[0,0].set_title('Magnetization')
 
 ##second plotting, chi
-axs[0,1].errorbar(temperature,np.average(Susceptibility,axis=1),yerr = Confidence_interval(Susceptibility))
+axs[0,1].errorbar(temperature,Susceptibility[:,0],yerr = Susceptibility[:,1])
 axs[0,1].set_xlim(T_initial,T_final)
 axs[0,1].set_title('Susceptibility')
 
 ###Third plotting, Energy
 
-axs[1,0].errorbar(temperature,np.average(Energy,axis=1),yerr = Confidence_interval(Energy))
+axs[1,0].errorbar(temperature,Energy[:,0],yerr= Energy[:,1])
 axs[1,0].set_xlim(T_initial,T_final)
 axs[1,0].set_title('Average energy per site')
 
 
 #####Fourth plotting, C_v
 
-axs[1,1].errorbar(temperature,np.average(Heat_Capacitance,axis=1),yerr = Confidence_interval(Heat_Capacitance))
+axs[1,1].errorbar(temperature,Heat_Capacitance[:,0],yerr= Heat_Capacitance[:,1])
 axs[1,1].set_xlim(T_initial,T_final)
 axs[1,1].set_title('Heat Capacitance')
 print('Total time used is',time.time()-Time)
