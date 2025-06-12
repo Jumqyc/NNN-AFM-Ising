@@ -7,7 +7,7 @@ The class is exposed to python using pybind11. The file bind.cpp records how it 
 The file wrapper.py processes the recorded data, and output directly the mean value and estimated error, based on raw data. 
 
 
-**How to create a python module using C++?**
+**How to create a C++ script avalilable for python?**
 
 Step 0: Download CMake.
 
