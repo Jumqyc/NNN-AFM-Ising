@@ -1,3 +1,10 @@
+**Basic structure of the project**
+
+The core of this project is a C++ header called Ising.hpp. This defines a object that can do basic monte carlo simulation of afm Ising model and record thermaldynamical data. 
+
+The class is exposed to python using pybind11. The file bind.cpp records how it is exposed to python. 
+
+The file wrapper.py processes the recorded data, and output directly the mean value and estimated error, based on raw data. 
 
 
 **How to create a python module using C++?**
